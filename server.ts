@@ -5,6 +5,8 @@ import fs from "fs";
 import Database from "better-sqlite3";
 import multer from "multer";
 import { fileURLToPath } from "url";
+import { createServer } from "http";
+import { Server } from "socket.io";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +47,14 @@ if (jobCount.count === 0) {
 }
 
 const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
 const PORT = 3000;
 
 app.use(express.json());
@@ -65,6 +75,14 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// Socket.io connection
+io.on("connection", (socket) => {
+  console.log("A user connected:", socket.id);
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+  });
+});
+
 // API Routes
 app.get("/api/jobs", (req, res) => {
   const jobs = db.prepare("SELECT * FROM jobs ORDER BY created_at DESC").all();
@@ -72,7 +90,7 @@ app.get("/api/jobs", (req, res) => {
 });
 
 app.get("/api/jobs/:id", (req, res) => {
-  const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(req.params.id);
+  const job = db.prepare("SELECT * FROM job WHERE id = ?").get(req.params.id);
   if (!job) return res.status(404).json({ error: "Job not found" });
   res.json(job);
 });
@@ -81,6 +99,11 @@ app.post("/api/jobs", (req, res) => {
   const { title, department, location, type, description } = req.body;
   const result = db.prepare("INSERT INTO jobs (title, department, location, type, description) VALUES (?, ?, ?, ?, ?)")
     .run(title, department, location, type, description || "");
+  const newJob = { id: result.lastInsertRowid, title, department, location, type, description, created_at: new Date().toISOString() };
+  
+  // Broadcast new job
+  io.emit("job:created", newJob);
+  
   res.json({ id: result.lastInsertRowid });
 });
 
@@ -94,6 +117,21 @@ app.post("/api/apply", upload.single("resume"), (req, res) => {
 
   const result = db.prepare("INSERT INTO candidates (job_id, name, email, resume_path) VALUES (?, ?, ?, ?)")
     .run(job_id, name, email, resume_path);
+  
+  const job = db.prepare("SELECT title FROM jobs WHERE id = ?").get(job_id) as { title: string };
+  const newCandidate = { 
+    id: result.lastInsertRowid, 
+    job_id, 
+    name, 
+    email, 
+    resume_path, 
+    status: 'New', 
+    job_title: job.title,
+    created_at: new Date().toISOString() 
+  };
+
+  // Broadcast new application
+  io.emit("candidate:applied", newCandidate);
   
   res.json({ id: result.lastInsertRowid });
 });
@@ -130,6 +168,6 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
-app.listen(PORT, "0.0.0.0", () => {
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });

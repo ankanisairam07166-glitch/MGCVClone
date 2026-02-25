@@ -1,5 +1,6 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useParams } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import { 
   Briefcase, 
   Users, 
@@ -27,6 +28,8 @@ import { Job, Candidate } from './types';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+const socket = io();
 
 // --- Components ---
 
@@ -91,6 +94,18 @@ const CareersPage = () => {
         setJobs(data);
         setLoading(false);
       });
+
+    // Real-time listener for new jobs
+    socket.on('job:created', (newJob: Job) => {
+      setJobs(prev => {
+        if (prev.some(j => j.id === newJob.id)) return prev;
+        return [newJob, ...prev];
+      });
+    });
+
+    return () => {
+      socket.off('job:created');
+    };
   }, []);
 
   const filteredJobs = jobs.filter(job => 
@@ -354,6 +369,26 @@ const AdminDashboard = () => {
   useEffect(() => {
     fetch('/api/jobs').then(res => res.json()).then(setJobs);
     fetch('/api/candidates').then(res => res.json()).then(setCandidates);
+
+    // Real-time listeners
+    socket.on('job:created', (newJob: Job) => {
+      setJobs(prev => {
+        if (prev.some(j => j.id === newJob.id)) return prev;
+        return [newJob, ...prev];
+      });
+    });
+
+    socket.on('candidate:applied', (newCandidate: Candidate) => {
+      setCandidates(prev => {
+        if (prev.some(c => c.id === newCandidate.id)) return prev;
+        return [newCandidate, ...prev];
+      });
+    });
+
+    return () => {
+      socket.off('job:created');
+      socket.off('candidate:applied');
+    };
   }, []);
 
   const handleAddJob = async (e: FormEvent) => {
